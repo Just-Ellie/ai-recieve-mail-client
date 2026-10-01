@@ -20,11 +20,13 @@ Then:
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 BASE = "https://ai-mail.sh"
+WAIT_MAX = 60  # the server holds each /wait request for at most 60 seconds
 INBOX = os.environ.get("AI_MAIL_INBOX")
 TOKEN = os.environ.get("AI_MAIL_TOKEN")
 
@@ -46,19 +48,19 @@ def _req(method, path, http_timeout=30, **params):
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", "replace")
         if e.code == 401:
-            raise AiMailError("bad inbox id or token (401)")
-        if e.code == 402:
-            raise AiMailError(
-                "inbox needs funding/extending (402) — "
-                "POST /inbox/<id>/day and pay the x402 invoice"
-            )
+            raise AiMailError("unknown inbox, or wrong token (401)")
         if e.code == 404:
-            raise AiMailError("inbox not found (404)")
+            raise AiMailError("message not found: deleted or older than 7 days (404)")
         raise AiMailError(f"HTTP {e.code}: {body[:200]}")
 
 
 def status():
-    """Plan, expiry, messages left for this inbox."""
+    """Plan, expiry, messages left for this inbox.
+
+    If "active" is false the inbox has lapsed and incoming mail is refused.
+    Renew it (same address) with POST /inbox/<id>/day or /month and pay the
+    x402 invoice.
+    """
     _, data = _req("GET", f"/inbox/{INBOX}")
     return data or {}
 
@@ -66,12 +68,14 @@ def status():
 def recent(limit=10):
     """Newest-first list of recent messages (sender, subject, extracted code)."""
     _, data = _req("GET", f"/inbox/{INBOX}/messages")
-    return (data or [])[:limit]
+    return (data or {}).get("messages", [])[:limit]
 
 
 def wait_for_code(timeout=120, burn=True):
     """
     Block until the next unseen email arrives, or timeout seconds pass.
+    The server holds each request for up to 60 seconds, so longer waits are
+    made of several requests.
 
     Returns the extracted OTP / verification code (or the verification
     link if there is no numeric code), or None on timeout.
@@ -79,15 +83,20 @@ def wait_for_code(timeout=120, burn=True):
     burn=True appends &delete=1: the message is erased server-side as it
     is returned — read-and-burn. Nothing lingers in storage.
     """
-    params = {"timeout": timeout}
-    if burn:
-        params["delete"] = 1
-    code, data = _req(
-        "GET", f"/inbox/{INBOX}/wait", http_timeout=timeout + 30, **params
-    )
-    if code == 204 or not data:
-        return None
-    return data.get("otp") or data.get("verify_link")
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        params = {"timeout": int(min(remaining, WAIT_MAX))}
+        if burn:
+            params["delete"] = 1
+        code, data = _req(
+            "GET", f"/inbox/{INBOX}/wait", http_timeout=WAIT_MAX + 30, **params
+        )
+        if code == 200 and data:
+            return data.get("otp") or data.get("verify_link")
+        # 204: nothing yet, keep waiting
 
 
 def main():

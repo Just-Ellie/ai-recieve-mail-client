@@ -39,9 +39,10 @@ Prefer MCP? Point any MCP client at `https://ai-mail.sh/mcp` with header `Author
 - `status()` — plan, expiry, messages left (`GET /inbox/:id`)
 - `wait_for_code()` — long-poll for the next unseen message (`GET /inbox/:id/wait?timeout=60`), returns the extracted OTP or verification link
 - `recent()` — list recent messages (`GET /inbox/:id/messages`)
-- Error handling for 401 (bad credentials), 402 (inbox needs funding), 404 (not found)
+- Error handling for 401 (unknown inbox or wrong token) and 404 (message deleted or expired)
+- Waits longer than 60 seconds are made of several requests (the server holds each for up to 60)
 
-Full API docs: https://ai-mail.sh
+Full API docs (written for agents): https://ai-mail.sh/llms.txt
 
 ## Privacy
 
